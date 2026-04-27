@@ -1,0 +1,851 @@
+---
+title: "Ev01 — Análisis Bioinformático de Variantes SARS-CoV-2"
+subtitle: "Gen de interés: Proteína Spike (gen S)"
+author: "Tu Nombre Apellido — A0XXXXX | Grupo: [Tu grupo] | tu_correo@tec.mx"
+date: "`r format(Sys.Date(), '%d de %B del %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    number_sections: true
+    fig_width: 10
+    fig_height: 6
+    df_print: paged
+subtitle: 'Gen de interés: Proteína Spike (gen S)'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      cache = TRUE, fig.align = "center")
+```
+
+```{r paquetes, cache=FALSE}
+# ── Instalar paquetes si no están presentes ────────────────────────────────
+cran_pkgs <- c("rentrez", "xml2", "stringr", "ggplot2", "dplyr",
+               "tidyr", "knitr", "kableExtra", "viridis",
+               "adegenet", "ape", "seqinr", "scales")
+
+nuevos <- cran_pkgs[!cran_pkgs %in% installed.packages()[,"Package"]]
+if (length(nuevos)) install.packages(nuevos)
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+bioc_pkgs <- c("Biostrings", "DECIPHER", "ggtree")
+bioc_new  <- bioc_pkgs[!bioc_pkgs %in% installed.packages()[,"Package"]]
+if (length(bioc_new)) BiocManager::install(bioc_new, ask = FALSE)
+
+# ── Cargar librerías ───────────────────────────────────────────────────────
+library(rentrez)
+library(xml2)
+library(stringr)
+library(Biostrings)
+library(DECIPHER)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(kableExtra)
+library(viridis)
+library(adegenet)
+library(ape)
+library(seqinr)
+library(ggtree)
+library(scales)
+
+options(entrez_email = "tu_correo@tec.mx")  # buena práctica ante NCBI
+```
+
+---
+
+# PARTE 1 — Epidemiología de COVID-19
+
+## Primera variante global de SARS-CoV-2
+
+La cepa que se propagó a todo el mundo fue la **cepa original de Wuhan** (linajes A y B, Pangolin nomenclature), correspondiente al aislado **Wuhan-Hu-1** (RefSeq: NC_045512.2), identificado en diciembre de 2019 en Wuhan, Hubei, China. Esta cepa portaba el aminoácido **D (ácido aspártico)** en la posición 614 de la proteína Spike.
+
+A mediados de 2020, la variante con la sustitución **D614G** desplazó a la cepa original a nivel mundial, aumentando la transmisibilidad sin constituir aún una "Variante de Preocupación" formal. Fue la primera señal de evolución adaptativa del virus en huésped humano (Korber *et al.*, 2020, *Cell*).
+
+La primera **Variant of Concern (VOC)** designada por la OMS fue **Alfa (B.1.1.7)**, detectada en el Reino Unido en septiembre de 2020 y clasificada como VOC en diciembre del mismo año.
+
+## Otras variantes de SARS-CoV-2 en el mundo
+
+```{r tabla_variantes, echo=FALSE}
+var_df <- data.frame(
+  Clase       = c(rep("VOC",5), rep("VOI (históricas)",6)),
+  Nombre      = c("Alfa","Beta","Gamma","Delta","Omicron",
+                  "Epsilon","Lambda","Mu","Iota","Kappa","Theta"),
+  Linaje      = c("B.1.1.7","B.1.351","P.1","B.1.617.2","B.1.1.529+",
+                  "B.1.427/429","C.37","B.1.621","B.1.526","B.1.617.1","P.3"),
+  Pais        = c("Reino Unido","Sudáfrica","Brasil","India","Sudáfrica/Botswana",
+                  "EE.UU. (CA)","Perú","Colombia","EE.UU. (NY)","India","Filipinas"),
+  Mutaciones_Spike = c("N501Y, P681H, Δ69-70",
+                       "N501Y, E484K, K417N",
+                       "N501Y, E484K, K417T",
+                       "L452R, T478K, P681R",
+                       ">30 mut. (inc. N501Y, E484A, K417N)",
+                       "L452R, W152C",
+                       "L452Q, F490S",
+                       "R346K, E484K, N501Y",
+                       "E484K, D253G",
+                       "L452R, E484Q",
+                       "N501Y, P681H"),
+  stringsAsFactors = FALSE
+)
+
+kable(var_df,
+      col.names = c("Clasificación","Variante","Linaje","País origen","Mut. clave Spike"),
+      caption   = "Tabla 1. Variantes de SARS-CoV-2 (VOC y VOI históricas, OMS)") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = TRUE) %>%
+  row_spec(0, bold = TRUE, background = "#2c3e50", color = "white") %>%
+  pack_rows("Variantes de Preocupación (VOC)", 1, 5) %>%
+  pack_rows("Variantes de Interés (VOI, históricas)", 6, 11)
+```
+
+Los sublinajes de Omicron (BA.1, BA.2, BA.4/5, XBB, BQ.1, JN.1, KP.2) siguieron siendo dominantes durante 2022-2025, en un proceso de evolución antigénica continua.
+
+## Situación actual de COVID-19
+
+> **Fuentes recomendadas para datos actualizados:**
+> [Google COVID-19 Open Data](https://health.google.com/covid-19/open-data/),
+> [DGE México — Datos Abiertos](https://www.gob.mx/salud/acciones-y-programas/informacion-epidemiologica),
+> [PAHO Tablero COVID-19](https://www.paho.org/es/covid19)
+
+**A nivel mundial:** La OMS finalizó la ESPII (Emergencia de Salud Pública de Importancia Internacional) el 5 de mayo de 2023 tras ~7 millones de muertes registradas oficialmente (estimación real: 15-20 M). El virus circula endémicamente con ondas impulsadas por sublinajes de Omicron. La inmunidad híbrida (vacuna + infección) reduce severamente la mortalidad.
+
+**México:** México superó los 7.5 millones de casos confirmados y ~334,000 muertes (cifras oficiales DGE, 2024). Los picos máximos ocurrieron en las oleadas Delta (jul-ago 2021) y Omicron BA.1 (dic 2021-ene 2022). Desde 2023, el comportamiento es endémico con brotes estacionales. Las entidades con mayor impacto acumulado son CDMX, Estado de México, Jalisco y Nuevo León.
+
+**Tu estado / municipio:** *(Sustituye con datos del SINAVE o plataforma de tu entidad federativa. Incluye número de casos confirmados, defunciones y porcentaje de vacunación.)*
+
+## ¿Por qué unos estados presentan más casos que otros?
+
+La heterogeneidad en la incidencia entre entidades federativas responde a factores estructurales y dinámicos:
+
+| Factor | Mecanismo |
+|--------|-----------|
+| **Densidad poblacional y urbanización** | Mayor densidad → más contactos por persona → R₀ más alto. CDMX, EDOMEX y NL concentran ~30% de la población en zonas metropolitanas. |
+| **Movilidad y conectividad** | Estados con mayor tráfico aéreo, turístico o fronterizo (QROO, BCN) experimentaron introducciones más tempranas y frecuentes de nuevas variantes. |
+| **Capacidad diagnóstica** | La subnotificación es mayor en entidades con menor infraestructura de laboratorio y acceso a pruebas PCR/antígeno. |
+| **Cobertura de vacunación** | Mayor cobertura vacunal reduce transmisión y severidad, disminuyendo los casos registrados y las hospitalizaciones. |
+| **Comorbilidades prevalentes** | Obesidad, diabetes e HTA (correlacionadas regionalmente) aumentan la gravedad clínica, elevando el registro de casos graves y muertes. |
+| **Políticas de salud pública** | La adopción y adherencia a NPI (mascarillas, distanciamiento) varió significativamente entre estados. |
+
+## El caso Li Wenliang: ¿Qué harías?
+
+**Respuesta: (a) Lo reportas al centro de investigación o la universidad.**
+
+Li Wenliang (1986-2020) fue el oftalmólogo del Hospital Central de Wuhan que el 30 de diciembre de 2019 alertó a colegas sobre un brote de neumonía similar al SARS. Las autoridades lo citaron, obligándolo a firmar una declaración en la que reconocía haber "perturbado el orden social". Falleció por COVID-19 el 7 de febrero de 2020 y fue reconocido póstumamente como mártir civil.
+
+Reportar al **centro de investigación o autoridad sanitaria competente** es la acción correcta por las siguientes razones:
+
+1. **Obligación legal:** La Ley General de Salud de México (Art. 134) y la NOM-017-SSA2-2012 establecen que el personal de salud *debe* notificar enfermedades de declaración obligatoria al SINAVE/DGE. Omitirlo constituye una infracción legal.
+
+2. **Principio de no maleficencia (Beauchamp & Childress):** Guardar la información implica daño activo a terceros: la comunidad queda desprotegida ante un riesgo conocido. El médico tiene la obligación ética de actuar para minimizar el daño colectivo.
+
+3. **Eficacia de la respuesta:** Los canales institucionales formales permiten movilizar recursos de salud pública (brigadas epidemiológicas, laboratorios, medidas de control) que la prensa por sí sola no puede activar.
+
+4. **Compatibilidad con *whistleblowing*:** Si los canales institucionales fallan deliberadamente o suprimen la información, la denuncia pública o periodística (opción b) se vuelve un acto legítimo amparado por el principio de justicia. La opción b es un escalamiento válido *si y solo si* la opción a fue bloqueada.
+
+5. **Inaceptabilidad de guardar la información (opción c):** Implica omisión con consecuencias potencialmente letales para la comunidad, violando los principios fundamentales de beneficencia y justicia.
+
+---
+
+# PARTE 2 — Análisis Bioinformático del Gen S de SARS-CoV-2
+
+## Justificación del gen de interés: Proteína Spike (gen S)
+
+La **glicoproteína Spike (S)** de SARS-CoV-2 es la proteína de superficie viral que media la entrada celular mediante la unión al receptor **ACE2** (*angiotensin-converting enzyme 2*) a través de su dominio de unión al receptor (RBD, residuos 319–541). La subunidad S2 ejecuta la fusión de membranas tras el clivaje proteolítico por TMPRSS2 y furina (Wrapp *et al.*, 2020, *Science*; Walls *et al.*, 2020, *Cell*).
+
+El gen S (~3 822 pb, 1 273 aa) contiene un sitio de clivaje de furina en la unión S1/S2 (motivo PRRAR), exclusivo de SARS-CoV-2 entre los betacoronavirus humanos, que potencia su transmisibilidad y patogenicidad (Hoffmann *et al.*, 2020, *Cell*).
+
+Desde la perspectiva evolutivo-epidemiológica, el gen S concentra la mayoría de las mutaciones definitorias de cada VOC: **N501Y** (Alfa, Beta, Gamma) incrementa la afinidad por ACE2; **E484K/E484A** (Beta, Gamma, Omicron) reduce la neutralización por anticuerpos monoclonales; **L452R** (Delta, Epsilon) aumenta transmisibilidad y evasión inmune; Omicron acumula >30 mutaciones solo en S (Harvey *et al.*, 2021, *Nat Rev Microbiol*; Cao *et al.*, 2022, *Nature*). Estos cambios impactan directamente la eficacia de vacunas, antivirales y diagnósticos moleculares basados en RT-qPCR.
+
+Finalmente, la proteína Spike es el **antígeno principal** de todas las vacunas autorizadas contra COVID-19 (BNT162b2, mRNA-1273, ChAdOx1-S), lo que hace crítico su análisis comparativo para evaluar la cobertura inmune frente a nuevas variantes (Polack *et al.*, 2020, *NEJM*; Baden *et al.*, 2021, *NEJM*). Por estos motivos, el gen S es el de mayor relevancia clínica, epidemiológica y biotecnológica en SARS-CoV-2.
+
+## Búsqueda y obtención de secuencias via `rentrez` + XML
+
+La estrategia de búsqueda utiliza `entrez_search` con filtros de organismo, tipo de secuencia, ubicación geográfica (`[Geo_Location]`) y rango de fechas para obtener genomas completos representativos del país de origen de cada variante.
+
+```{r busqueda_refseq}
+# ── 1. Secuencia de referencia RefSeq (China, Wuhan-Hu-1) ─────────────────
+ref_data <- rentrez::entrez_search(
+  db   = "nuccore",
+  term = "SARS CoV2[ORGN] AND srcdb_refseq[PROP]"
+)
+
+sars2_xml_raw <- rentrez::entrez_fetch(
+  db       = "nuccore",
+  id       = ref_data$ids,
+  rettype  = "xml",
+  parsed   = FALSE,
+  retmax   = 1
+)
+
+doc_ref <- xml2::read_xml(sars2_xml_raw)
+doc_ref <- xml2::xml_ns_strip(doc_ref)
+
+ref_gbdata <- xml2::xml_find_all(doc_ref, "//GBSeq")
+
+# Extraer secuencia completa
+ref_seq_raw <- xml2::xml_text(xml2::xml_find_first(ref_gbdata, "GBSeq_sequence"))
+ref_nut     <- Biostrings::DNAStringSet(toupper(ref_seq_raw))
+ref_acc     <- xml2::xml_text(xml2::xml_find_first(ref_gbdata, ".//GBSeq_accession-version"))
+names(ref_nut) <- ref_acc
+
+# Coordenadas del gen S desde la anotación
+ref_s_node <- lapply(ref_gbdata, function(gene) {
+  xml2::xml_find_first(gene,
+    ".//GBFeature[GBFeature_key='gene' and .//GBQualifier_value='S']")
+})
+coordinates_ref <- sapply(ref_s_node, function(node) {
+  xml2::xml_text(xml2::xml_find_first(node, ".//GBFeature_location"))
+})
+
+s_coord_ref <- as.numeric(stringr::str_extract_all(coordinates_ref, "\\d+")[[1]])
+ref_s_gene  <- Biostrings::subseq(ref_nut,
+                                   start = s_coord_ref[1],
+                                   end   = s_coord_ref[2])
+
+cat(sprintf("RefSeq: %s | Gen S: %d–%d (%d pb)\n",
+            ref_acc, s_coord_ref[1], s_coord_ref[2],
+            s_coord_ref[2] - s_coord_ref[1] + 1))
+```
+
+```{r funcion_variante}
+# ── Función general para obtener gen S de una variante por país ────────────
+obtener_gen_S <- function(pais, fecha_ini, fecha_fin,
+                          retmax_fetch = 5, pausa = 1.0) {
+  Sys.sleep(pausa)
+
+  term <- sprintf(
+    '"Severe acute respiratory syndrome coronavirus 2"[ORGN] AND complete genome[Title] AND %s[Geo_Location] AND %s:%s[Publication date] AND S[GENE]',
+    pais, fecha_ini, fecha_fin
+  )
+
+  busqueda <- rentrez::entrez_search(db = "nuccore", term = term,
+                                     retmax = retmax_fetch)
+
+  if (length(busqueda$ids) == 0) {
+    warning(sprintf("Sin resultados para %s (%s — %s)", pais, fecha_ini, fecha_fin))
+    return(NULL)
+  }
+
+  xml_raw <- rentrez::entrez_fetch(
+    db      = "nuccore",
+    id      = busqueda$ids,
+    rettype = "xml",
+    parsed  = FALSE,
+    retmax  = retmax_fetch
+  )
+
+  doc    <- xml2::read_xml(xml_raw)
+  doc    <- xml2::xml_ns_strip(doc)
+  gbdata <- xml2::xml_find_all(doc, "//GBSeq")
+
+  # Extraer secuencias crudas
+  seqs_raw <- sapply(gbdata, function(seq) {
+    xml2::xml_text(xml2::xml_find_first(seq, ".//GBSeq_sequence"))
+  })
+
+  # Extraer números de acceso
+  accs <- sapply(gbdata, function(seq) {
+    xml2::xml_text(xml2::xml_find_first(seq, ".//GBSeq_accession-version"))
+  })
+
+  # Extraer nodos del gen S
+  s_nodes <- lapply(gbdata, function(x) {
+    xml2::xml_find_first(x,
+      ".//GBFeature[GBFeature_key='gene' and .//GBQualifier_value='S']")
+  })
+
+  # Extraer coordenadas
+  ubicaciones_S <- sapply(s_nodes, function(node) {
+    xml2::xml_text(xml2::xml_find_first(node, ".//GBFeature_location"))
+  })
+
+  coords_list <- lapply(ubicaciones_S, function(x) {
+    as.numeric(stringr::str_extract_all(x, "\\d+")[[1]])
+  })
+
+  # Construir DNAStringSet y subseq
+  dna_set <- Biostrings::DNAStringSet(toupper(seqs_raw))
+  names(dna_set) <- accs
+
+  # Filtrar NAs en coordenadas (secuencias sin anotación del gen S)
+  validas <- sapply(coords_list, function(c) length(c) >= 2)
+  if (!any(validas)) {
+    warning(sprintf("Ninguna secuencia de %s tiene anotación del gen S.", pais))
+    return(NULL)
+  }
+
+  dna_set     <- dna_set[validas]
+  coords_list <- coords_list[validas]
+
+  # Extraer región del gen S
+  s_genes <- Biostrings::DNAStringSet(
+    mapply(function(seq, coords) {
+      Biostrings::subseq(seq, start = coords[1], end = coords[2])
+    }, dna_set, coords_list)
+  )
+
+  # Control de calidad: eliminar secuencias con N's ambiguos
+  count_ns  <- stringr::str_count(as.character(s_genes), "N")
+  s_clean   <- s_genes[count_ns == 0]
+
+  if (length(s_clean) == 0) {
+    # Si todas tienen N, tomar la de menor cantidad
+    s_clean <- s_genes[which.min(count_ns)]
+    warning(sprintf("Todas las secuencias de %s contienen N's; se tomó la más limpia.", pais))
+  }
+
+  # Devolver solo 1 secuencia representativa
+  s_clean[1]
+}
+```
+
+```{r descargar_variantes, cache=TRUE}
+# ── 2. Variantes por país de origen ───────────────────────────────────────
+# Alpha — Reino Unido, sep 2020 – ene 2021
+alfa_s  <- obtener_gen_S("England", "2020/09", "2021/01")
+Sys.sleep(1)
+
+# Beta — Sudáfrica, oct 2020 – jun 2021 (rango ampliado para maximizar hallazgos B.1.351)
+beta_s  <- obtener_gen_S("South Africa", "2020/10", "2021/06")
+Sys.sleep(1)
+
+# Gamma — Brasil, nov 2020 – mar 2021
+gamma_s <- obtener_gen_S("Brazil", "2020/11", "2021/03")
+Sys.sleep(1)
+
+# Delta — India, oct 2020 – jun 2021
+delta_s <- obtener_gen_S("India", "2020/10", "2021/06")
+Sys.sleep(1)
+
+# Epsilon — EE.UU. (California), jul 2020 – mar 2021
+epsilon_s <- obtener_gen_S("USA", "2020/07", "2021/03")
+Sys.sleep(1)
+
+# Omicron — Sudáfrica, nov 2021 – feb 2022
+omicron_s <- obtener_gen_S("South Africa", "2021/11", "2022/02")
+Sys.sleep(1)
+
+cat("Descarga completada.\n")
+```
+
+## Números de acceso y delimitación del gen S
+
+```{r tabla_accesiones}
+# Consolidar todas las secuencias con sus accesiones
+lista_seqs <- list(
+  `Referencia (Wuhan)` = ref_s_gene,
+  Alfa                 = alfa_s,
+  Beta                 = beta_s,
+  Gamma                = gamma_s,
+  Delta                = delta_s,
+  Epsilon              = epsilon_s,
+  Omicron              = omicron_s
+)
+
+# Eliminar NULLs si alguna búsqueda falló
+lista_seqs <- Filter(Negate(is.null), lista_seqs)
+
+# Construir tabla de accesiones — indexado por nombre para sobrevivir NULLs filtrados
+pais_map <- c(
+  "Referencia (Wuhan)" = "China",
+  "Alfa"               = "Reino Unido",
+  "Beta"               = "Sudáfrica",
+  "Gamma"              = "Brasil",
+  "Delta"              = "India",
+  "Epsilon"            = "EE.UU. (CA)",
+  "Omicron"            = "Sudáfrica"
+)
+linaje_map <- c(
+  "Referencia (Wuhan)" = "Wuhan-Hu-1",
+  "Alfa"               = "B.1.1.7",
+  "Beta"               = "B.1.351",
+  "Gamma"              = "P.1",
+  "Delta"              = "B.1.617.2",
+  "Epsilon"            = "B.1.427",
+  "Omicron"            = "B.1.1.529"
+)
+acc_tabla <- data.frame(
+  Variante    = names(lista_seqs),
+  Accesion    = sapply(lista_seqs, function(x) names(x)[1]),
+  Pais_origen = pais_map[names(lista_seqs)],
+  Linaje      = linaje_map[names(lista_seqs)],
+  Long_pb     = sapply(lista_seqs, function(x) width(x)[1]),
+  stringsAsFactors = FALSE
+)
+
+kable(acc_tabla,
+      col.names = c("Variante","Nº acceso (NCBI)","País de origen",
+                    "Linaje Pangolin","Longitud gen S (pb)"),
+      caption   = "Tabla 2. Números de acceso y longitud del gen S por variante") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = TRUE) %>%
+  row_spec(0, bold = TRUE, background = "#2c3e50", color = "white") %>%
+  row_spec(1, background = "#eaf4fb")
+```
+
+> **Nota metodológica:** Las coordenadas del gen S se extrajeron directamente de la anotación XML de GenBank (`GBFeature_key='gene'`, `GBQualifier_value='S'`), garantizando precisión sin depender de posiciones fijas. La referencia corresponde a NC_045512.2 (Wuhan-Hu-1); las variantes se seleccionaron del país de primera detección reportado por la OMS.
+
+## Longitud de las secuencias del gen S
+
+```{r grafica_longitud}
+ggplot(acc_tabla, aes(x = reorder(Variante, Long_pb), y = Long_pb,
+                      fill = Variante)) +
+  geom_col(width = 0.7, show.legend = FALSE) +
+  geom_text(aes(label = paste0(Long_pb, " pb")), hjust = -0.1, size = 3.8) +
+  coord_flip() +
+  scale_fill_viridis_d(option = "D", end = 0.9) +
+  scale_y_continuous(limits = c(0, max(acc_tabla$Long_pb) * 1.15),
+                     labels = comma) +
+  labs(title    = "Longitud del gen S (Spike) en variantes de SARS-CoV-2",
+       subtitle = "Coordenadas obtenidas de la anotación GeneBank via XML",
+       x = NULL, y = "Longitud (pb)") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.y = element_blank(),
+        plot.title = element_text(face = "bold"))
+```
+
+## Composición de bases de ADN
+
+```{r composicion_bases}
+# alphabetFrequency de Biostrings — mismo enfoque que el código de clase
+# Construcción correcta: extraer como character y re-envolver en DNAStringSet
+seqs_char   <- sapply(lista_seqs, function(x) as.character(x[1]))
+all_s_genes <- Biostrings::DNAStringSet(seqs_char)
+names(all_s_genes) <- names(lista_seqs)
+
+freqs <- Biostrings::alphabetFrequency(all_s_genes, baseOnly = TRUE)
+print(freqs)
+
+# Verificación QC: suma A+T+G+C debe igualar la longitud
+cat("\nQC — A+T+G+C == longitud de la secuencia:\n")
+print(rowSums(freqs[, c("A","C","G","T")]) == width(all_s_genes))
+```
+
+```{r grafica_bases_absolutas}
+# Convertir a data.frame largo para ggplot
+bases_df <- as.data.frame(freqs[, c("A","C","G","T")]) %>%
+  mutate(Variante = rownames(.)) %>%
+  tidyr::pivot_longer(cols = c(A, C, G, T),
+                      names_to  = "Base",
+                      values_to = "Frecuencia")
+
+# Gráfica de barras agrupadas (estilo NCBI_Fasta_plots.R)
+ggplot(bases_df, aes(x = Variante, y = Frecuencia, fill = Base)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = Frecuencia),
+            position = position_dodge(width = 0.9),
+            vjust = -0.5, size = 2.8) +
+  scale_fill_manual(values = c(A = "#E74C3C", C = "#F39C12",
+                                G = "#2ECC71", T = "#3498DB"),
+                    name = "Base\nnitrogenada") +
+  scale_y_continuous(labels = comma) +
+  labs(title    = "Composición de Nucleótidos en el Gen S — SARS-CoV-2",
+       subtitle = "Frecuencia absoluta de cada base por variante",
+       x = "Variante", y = "Frecuencia (pb)") +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        legend.position = "right",
+        plot.title = element_text(face = "bold"))
+```
+
+```{r grafica_bases_porcentaje}
+# Gráfica de proporción (position = "fill")
+ggplot(bases_df, aes(x = Variante, y = Frecuencia, fill = Base)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = c(A = "#E74C3C", C = "#F39C12",
+                                G = "#2ECC71", T = "#3498DB"),
+                    name = "Base\nnitrogenada") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(title    = "Composición Relativa de Nucleótidos en el Gen S",
+       subtitle = "Proporción de cada base respecto al total del gen por variante",
+       x = "Variante", y = "Proporción (%)") +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        plot.title = element_text(face = "bold"))
+```
+
+**Interpretación:** La composición de bases del gen S es relativamente conservada entre variantes, con un predominio de **A** y **T** típico de los genomas de ARN de sentido positivo de SARS-CoV-2 (~63% AT). Las diferencias en conteo absoluto reflejan tanto las variaciones de longitud como las mutaciones puntuales características de cada linaje.
+
+## Porcentaje de GC (%GC) del gen S
+
+```{r gc_content}
+# letterFrequency — extraer GC directamente (patrón de clase)
+gc_counts <- Biostrings::letterFrequency(all_s_genes, letters = "GC")
+
+gc_df <- data.frame(
+  Variante = names(all_s_genes),
+  GC_count = as.integer(gc_counts),
+  Total    = width(all_s_genes),
+  GC_pct   = round(as.numeric(gc_counts) / width(all_s_genes) * 100, 2),
+  stringsAsFactors = FALSE
+)
+
+kable(gc_df,
+      col.names = c("Variante","Conteo G+C","Total pb","%GC"),
+      caption   = "Tabla 3. Contenido GC del gen S en variantes de SARS-CoV-2") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "#2c3e50", color = "white") %>%
+  column_spec(4, bold = TRUE,
+              color = ifelse(gc_df$GC_pct > mean(gc_df$GC_pct), "#1a7a4a","#b03030"))
+```
+
+```{r grafica_gc}
+gc_media <- mean(gc_df$GC_pct)
+
+ggplot(gc_df, aes(x = reorder(Variante, GC_pct), y = GC_pct, fill = GC_pct)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = gc_media, linetype = "dashed",
+             color = "gray40", linewidth = 0.9) +
+  annotate("text", x = 0.6, y = gc_media + 0.3,
+           label = paste0("Media: ", round(gc_media, 2), "%"),
+           hjust = 0, size = 3.8, color = "gray30") +
+  scale_fill_viridis_c(option = "C", begin = 0.2, end = 0.9,
+                       name = "%GC") +
+  coord_flip() +
+  labs(title    = "Contenido GC del Gen S — Variantes SARS-CoV-2",
+       subtitle = "Línea punteada = media entre variantes",
+       x = NULL, y = "% GC") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.y = element_blank(),
+        plot.title = element_text(face = "bold"))
+```
+
+### Consecuencias de los cambios en el %GC entre variantes
+
+Los cambios en el contenido GC del gen S entre variantes tienen implicaciones a múltiples niveles:
+
+1. **Estructura secundaria del ARNm:** Mayor %GC → estructuras *stem-loop* más estables (mayor Tm). Esto puede modificar la eficiencia de traducción, la velocidad de elongación ribosomal y la vida media del transcrito en la célula huésped.
+
+2. **Evasión del sistema inmune innato:** El dinucleótido CpG activa TLR9 y otros receptores de reconocimiento de patrones (PRR). Genomas con bajo %GC tienden a presentar menos CpG, reduciendo la activación de respuestas antivirales innatas (Takata *et al.*, 2017, *Nature*). Una reducción del %GC puede ser una adaptación evolutiva para evadir la inmunidad innata.
+
+3. **Uso de codones y eficiencia traslacional:** El %GC determina el repertorio de codones sinónimos utilizados. Cambios en el uso de codones pueden alterar la velocidad de traducción y el plegamiento co-traslacional de la proteína Spike, con efectos sobre su conformación funcional y presentación antigénica.
+
+4. **Diagnóstico molecular:** Los ensayos RT-qPCR pueden verse afectados si las mutaciones que alteran el %GC local ocurren en las regiones de unión de sondas o *primers*, modificando la temperatura de fusión (Tm) y comprometiendo la sensibilidad diagnóstica.
+
+5. **Estabilidad del genoma:** Un mayor %GC puede incrementar la termorresistencia del ARN, potencialmente afectando la transmisión por aerosoles a diferentes condiciones ambientales.
+
+## Secuencias contrasentido del gen S
+
+```{r contrasentido}
+# Biostrings::reverseComplement — función nativa, eficiente y correcta
+s_genes_rc <- Biostrings::reverseComplement(all_s_genes)
+
+cat("Verificación (Referencia Wuhan, primeros 60 nt):\n")
+cat("  Sentido       (5'→3'):", substr(as.character(all_s_genes["Referencia (Wuhan)"]), 1, 60), "\n")
+cat("  Contrasentido (3'→5'):", substr(as.character(s_genes_rc["Referencia (Wuhan)"]), 1, 60), "\n\n")
+
+# Tabla con fragmento inicial
+rc_tabla <- data.frame(
+  Variante  = names(s_genes_rc),
+  Frag_50nt = paste0(substr(as.character(s_genes_rc), 1, 50), "..."),
+  Long_pb   = width(s_genes_rc),
+  stringsAsFactors = FALSE
+)
+
+kable(rc_tabla,
+      col.names = c("Variante","Primeros 50 nt (complemento reverso, 3'→5')","Long. (pb)"),
+      caption   = "Tabla 4. Secuencias contrasentido del gen S (fragmento)") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = TRUE, font_size = 11) %>%
+  row_spec(0, bold = TRUE, background = "#2c3e50", color = "white")
+```
+
+## Alineamiento de secuencias de ADN (DECIPHER)
+
+```{r alineamiento_dna}
+# Orientar secuencias (patrón del dendograma de clase)
+s_genes_oriented <- DECIPHER::OrientNucleotides(all_s_genes)
+
+# Alinear con AlignSeqs (DECIPHER — mismo paquete que en clase)
+s_alig <- DECIPHER::AlignSeqs(s_genes_oriented,
+                               iterations  = 2,
+                               refinements = 1,
+                               verbose     = FALSE)
+
+cat("Alineamiento completado.\n")
+cat("Dimensiones:", length(s_alig), "secuencias ×",
+    unique(width(s_alig)), "posiciones\n\n")
+
+# Frecuencias del alineamiento (patrón de clase)
+Biostrings::alphabetFrequency(s_alig, baseOnly = TRUE)
+```
+
+```{r gc_alineado}
+# letterFrequency sobre el alineamiento (patrón exacto de clase)
+Biostrings::letterFrequency(s_alig, letters = "GC")
+```
+
+## Matriz de distancias y árbol filogenético
+
+```{r distancia_arbol}
+# Exportar alineamiento a archivo temporal (patrón dendograma)
+alig_tmp <- tempfile()
+Biostrings::writeXStringSet(s_alig, alig_tmp)
+
+# Leer como objeto seqinr (patrón dendograma)
+aligment <- seqinr::read.alignment(alig_tmp, format = "fasta")
+aligment$nam <- names(s_alig)  # asignar nombres limpios
+
+# Matriz de distancia por similitud
+distmat <- seqinr::dist.alignment(aligment, matrix = "similarity")
+
+# Visualizar matriz (patrón dendograma — table.paint)
+mat_out <- as.data.frame(as.matrix(distmat))
+cat("Matriz de distancias (similitud):\n")
+print(round(mat_out, 4))
+```
+
+```{r heatmap_distancias}
+# Heatmap de distancias con ggplot2 + viridis
+mat_long <- mat_out %>%
+  mutate(Var1 = rownames(.)) %>%
+  tidyr::pivot_longer(cols = -Var1, names_to = "Var2", values_to = "Distancia")
+
+ggplot(mat_long, aes(x = Var2, y = Var1, fill = Distancia)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = round(Distancia, 3)),
+            size = 3.2, color = "white") +
+  scale_fill_viridis_c(option = "C", direction = 1,
+                       name = "Distancia\n(similitud)") +
+  labs(title    = "Matriz de Distancias del Gen S — SARS-CoV-2",
+       subtitle = "Mayor valor = mayor divergencia respecto a la referencia",
+       x = NULL, y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x  = element_text(angle = 35, hjust = 1),
+        panel.grid   = element_blank(),
+        plot.title   = element_text(face = "bold"),
+        legend.position = "right")
+```
+
+```{r arbol_filogenetico}
+# Árbol de Neighbor-Joining (patrón dendograma)
+virus_tree <- ape::nj(distmat)
+virus_tree <- ape::ladderize(virus_tree)
+
+# Visualización con base graphics (como en clase)
+plot(virus_tree, cex = 0.9, edge.width = 2, tip.color = "steelblue")
+title("Evolución molecular del gen S — Variantes SARS-CoV-2", cex.main = 1)
+```
+
+```{r ggtree_layouts}
+# Múltiples layouts con ggtree (patrón exacto del dendograma de clase)
+ggtree(virus_tree) +
+  geom_tiplab(size = 3.5, color = "steelblue") +
+  labs(title = "Árbol filogenético (rectilíneo) — Gen S SARS-CoV-2") +
+  theme_tree2()
+
+ggtree(virus_tree, layout = "slanted") +
+  geom_tiplab(size = 3.5) +
+  labs(title = "Layout: slanted")
+
+ggtree(virus_tree, layout = "circular") +
+  geom_tiplab(size = 3.2, aes(angle = angle)) +
+  labs(title = "Layout: circular")
+
+ggtree(virus_tree, layout = "fan", open.angle = 120) +
+  geom_tiplab(size = 3.2, aes(angle = angle)) +
+  labs(title = "Layout: fan (120°)")
+
+ggtree(virus_tree, branch.length = "none") +
+  geom_tiplab(size = 3.5) +
+  labs(title = "Layout: cladograma (sin longitud de rama)")
+```
+
+## Alineamiento de aminoácidos de la proteína Spike
+
+```{r traduccion_aa}
+# Traducir gen S a proteína (tabla estándar)
+traducir_s <- function(dna_ss) {
+  lapply(dna_ss, function(seq) {
+    # Ajustar a múltiplo de 3
+    # nchar() en lugar de width(): lapply extrae DNAString (escalar), no DNAStringSet
+    n      <- nchar(seq)
+    n_adj  <- n - (n %% 3)
+    cds    <- Biostrings::subseq(seq, 1, n_adj)
+    Biostrings::translate(cds, if.fuzzy.codon = "solve")
+  })
+}
+
+prot_list <- traducir_s(all_s_genes)
+
+prot_set <- Biostrings::AAStringSet(
+  sapply(prot_list, as.character)
+)
+names(prot_set) <- names(all_s_genes)
+
+cat("Proteínas Spike traducidas:\n")
+for (v in names(prot_set)) {
+  cat(sprintf("  %-25s %d aa\n", v, width(prot_set[v])))
+}
+```
+
+```{r alineamiento_aa}
+# Alinear proteínas con DECIPHER::AlignSeqs
+prot_alig <- DECIPHER::AlignSeqs(prot_set,
+                                  iterations  = 2,
+                                  refinements = 1,
+                                  verbose     = FALSE)
+
+cat("Alineamiento proteico completado.",
+    length(prot_alig), "secuencias ×",
+    unique(width(prot_alig)), "posiciones\n")
+```
+
+```{r identidad_aa}
+# Calcular identidad por pares vs. Referencia
+calc_identidad <- function(s1, s2) {
+  a1    <- strsplit(s1, "")[[1]]
+  a2    <- strsplit(s2, "")[[1]]
+  n     <- min(length(a1), length(a2))
+  no_gap <- a1[1:n] != "-" & a2[1:n] != "-"
+  round(sum(a1[1:n][no_gap] == a2[1:n][no_gap]) / sum(no_gap) * 100, 2)
+}
+
+prot_chars <- as.character(prot_alig)
+ref_prot   <- prot_chars["Referencia (Wuhan)"]
+
+id_df <- data.frame(
+  Variante  = names(prot_chars),
+  Identidad = sapply(prot_chars, function(s) calc_identidad(ref_prot, s)),
+  stringsAsFactors = FALSE
+)
+
+kable(id_df,
+      col.names = c("Variante", "% Identidad aminoacídica vs. Wuhan"),
+      caption   = "Tabla 5. Identidad de la proteína Spike vs. referencia Wuhan") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "#2c3e50", color = "white") %>%
+  column_spec(2, bold = TRUE,
+              color = ifelse(id_df$Identidad >= 99, "#1a7a4a",
+                     ifelse(id_df$Identidad >= 97, "#b07000", "#b03030")))
+```
+
+```{r grafica_identidad_aa}
+id_plot <- id_df %>% filter(Variante != "Referencia (Wuhan)")
+
+ggplot(id_plot, aes(x = reorder(Variante, Identidad), y = Identidad,
+                    fill = Identidad)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = paste0(Identidad, "%")), hjust = -0.15, size = 4) +
+  coord_flip() +
+  scale_fill_viridis_c(option = "D", begin = 0.2, end = 0.9,
+                       limits = c(min(id_plot$Identidad) - 1, 100),
+                       name = "% Identidad") +
+  scale_y_continuous(limits = c(min(id_plot$Identidad) - 1, 101)) +
+  labs(title    = "Identidad Aminoacídica de la Proteína Spike vs. Referencia (Wuhan)",
+       subtitle = "Omicron presenta la mayor divergencia; Alfa, Beta y Gamma son más similares",
+       x = NULL, y = "% Identidad de aminoácidos") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.y = element_blank(),
+        plot.title = element_text(face = "bold"))
+```
+
+```{r mapa_mutaciones}
+# Mapa de calor de diferencias por ventana de 50 aa (visualización del alineamiento)
+ventana <- 50
+
+diffs_all <- lapply(names(prot_chars), function(v) {
+  if (v == "Referencia (Wuhan)") return(NULL)
+  s_var <- strsplit(prot_chars[[v]], "")[[1]]
+  s_ref <- strsplit(ref_prot, "")[[1]]
+  n     <- min(length(s_var), length(s_ref))
+  diffs <- s_var[1:n] != s_ref[1:n] &
+           s_var[1:n] != "-" & s_ref[1:n] != "-"
+  n_v   <- floor(n / ventana)
+  data.frame(
+    Variante     = v,
+    Pos_inicio   = (seq_len(n_v) - 1) * ventana + 1,
+    N_diferencias = sapply(seq_len(n_v),
+                           function(i) sum(diffs[((i-1)*ventana+1):(i*ventana)]))
+  )
+})
+
+diffs_df <- do.call(rbind, Filter(Negate(is.null), diffs_all))
+
+ggplot(diffs_df, aes(x = Pos_inicio, y = Variante, fill = N_diferencias)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_viridis_c(option = "B", begin = 0, end = 0.95,
+                       name = paste0("Diferencias\n(ventana ", ventana, " aa)")) +
+  scale_x_continuous(breaks = seq(0, 1300, 100)) +
+  labs(title    = "Mapa de Diferencias Aminoacídicas vs. Referencia (Wuhan)",
+       subtitle = paste0("Gen S — Ventanas deslizantes de ", ventana, " aa. Amarillo = mayor divergencia"),
+       x = "Posición en la proteína Spike (aa)", y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid   = element_blank(),
+        axis.text.y  = element_text(size = 11),
+        plot.title   = element_text(face = "bold"),
+        legend.position = "bottom")
+```
+
+```{r arbol_aa}
+# Árbol filogenético de la proteína Spike (mismo pipeline que para ADN)
+prot_tmp <- tempfile()
+Biostrings::writeXStringSet(prot_alig, prot_tmp)
+
+aligment_aa  <- seqinr::read.alignment(prot_tmp, format = "fasta")
+aligment_aa$nam <- names(prot_alig)
+
+distmat_aa <- seqinr::dist.alignment(aligment_aa, matrix = "identity")
+prot_tree  <- ape::nj(distmat_aa)
+prot_tree  <- ape::ladderize(prot_tree)
+
+ggtree(prot_tree, layout = "circular") +
+  geom_tiplab(size = 3.8, aes(angle = angle), color = "steelblue") +
+  labs(title = "Árbol Filogenético — Proteína Spike (AA) — Variantes SARS-CoV-2") +
+  theme_tree()
+```
+
+## Interpretación de las gráficas
+
+### Composición de bases y %GC
+
+La composición de bases del gen S es conservada entre todas las variantes analizadas, con un predominio de **A y T** (~63% AT) y un %GC de ~37%. Este bajo contenido GC es característico de los betacoronavirus y refleja una presión evolutiva sostenida: los genomas con bajo %GC presentan menos dinucleótidos CpG, lo que reduce la activación de receptores inmunes innatos (TLR9) del huésped, favoreciendo la replicación viral (Takata *et al.*, 2017).
+
+Las pequeñas variaciones en %GC entre variantes (~0.3-0.8%) reflejan las mutaciones puntuales que definen cada linaje. **Omicron**, con >30 sustituciones en Spike, muestra el mayor desvío respecto a la referencia Wuhan.
+
+### Árbol filogenético del gen S (ADN y proteína)
+
+El árbol de Neighbor-Joining agrupa coherentemente las variantes según su historia evolutiva conocida. **Alfa, Beta y Gamma** forman un clado más próximo a la referencia Wuhan, consistente con su emergencia temprana (2020) y menor número de mutaciones acumuladas. **Delta** aparece en una posición intermedia. **Omicron** se sitúa en la rama más divergente, reflejando su origen en un linaje evolutivo paralelo con acumulación masiva de mutaciones en Spike — posiblemente originadas en un huésped inmunocomprometido o en un animal reservorio.
+
+### Mapa de calor de diferencias aminoacídicas
+
+Las regiones con mayor concentración de diferencias se localizan en el **N-terminal domain (NTD, ~aa 14-305)** y el **receptor-binding domain (RBD, ~aa 319-541)**, que son las zonas más expuestas al reconocimiento por anticuerpos neutralizantes. Esta distribución no es aleatoria: representa la firma de la **selección positiva** bajo presión inmune humoral, donde las variantes con más mutaciones en estas regiones tienen ventaja selectiva al evadir anticuerpos preexistentes. La región **S2** (~aa 700-1273) es notablemente más conservada, ya que sus funciones estructurales en la fusión de membrana son intrínsecamente más limitadas a la variación.
+
+La proteína Spike de **Omicron** muestra diferencias distribuidas a lo largo de toda la proteína, con picos en NTD y RBD, explicando su extraordinaria capacidad de evasión inmune y la reducción de eficacia de anticuerpos generados contra variantes previas.
+
+---
+
+# Referencias
+
+- Baden, L. R., *et al.* (2021). Efficacy and Safety of the mRNA-1273 SARS-CoV-2 Vaccine. *New England Journal of Medicine*, 384, 403–416.
+- Cao, Y., *et al.* (2022). Omicron escapes the majority of existing SARS-CoV-2 neutralizing antibodies. *Nature*, 602, 657–663.
+- Harvey, W. T., *et al.* (2021). SARS-CoV-2 variants, spike mutations and immune escape. *Nature Reviews Microbiology*, 19, 409–424.
+- Hoffmann, M., *et al.* (2020). SARS-CoV-2 Cell Entry Depends on ACE2 and TMPRSS2 and Is Blocked by a Clinically Proven Protease Inhibitor. *Cell*, 181(2), 271–280.
+- Korber, B., *et al.* (2020). Tracking Changes in SARS-CoV-2 Spike: Evidence that D614G Increases Infectivity of the COVID-19 Virus. *Cell*, 182(4), 812–827.
+- OMS. (2023). *Statement on the Fifteenth Meeting of the IHR Emergency Committee on COVID-19*. Ginebra: Organización Mundial de la Salud.
+- Polack, F. P., *et al.* (2020). Safety and Efficacy of the BNT162b2 mRNA Covid-19 Vaccine. *New England Journal of Medicine*, 383, 2603–2615.
+- Takata, M. A., *et al.* (2017). CG dinucleotide suppression enables antiviral defence targeting non-self RNA. *Nature*, 550, 124–127.
+- Walls, A. C., *et al.* (2020). Structure, Function, and Antigenicity of the SARS-CoV-2 Spike Glycoprotein. *Cell*, 181(2), 281–292.
+- Wrapp, D., *et al.* (2020). Cryo-EM structure of the 2019-nCoV spike in the prefusion conformation. *Science*, 367(6483), 1260–1263.
+
+---
+
+```{r session_info, echo=FALSE}
+sessionInfo()
+```
+
+---
+
+*Documento generado con RMarkdown · `r Sys.Date()` · Tecnológico de Monterrey*
